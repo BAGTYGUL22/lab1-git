@@ -1,4 +1,7 @@
+from __future__ import annotations
 
+from ..defense.damage import Damage
+from ..defense.damage_handler import DamageHandler
 from ..combat.hit import Hit
 from ..core.dice import Dice
 from .enemy import Enemy
@@ -7,9 +10,15 @@ from .enemy import Enemy
 class AbstractEnemy(Enemy):
 
     def __init__(
-        self, code: str, name: str, max_health: int,
-        min_damage: int, max_damage: int,
-        experience_reward: int, gold_reward: int,
+        self,
+        code: str,
+        name: str,
+        max_health: int,
+        min_damage: int,
+        max_damage: int,
+        experience_reward: int,
+        gold_reward: int,
+        defense: DamageHandler | None = None,
     ) -> None:
         self._code = code
         self._name = name
@@ -19,23 +28,31 @@ class AbstractEnemy(Enemy):
         self._experience_reward = experience_reward
         self._gold_reward = gold_reward
         self._health = max_health
+        self._defense = defense
 
     def roll_damage(self) -> Hit:
-        return Hit(Dice().roll(self._min_damage, self._max_damage), False)
+        return Hit(
+            Dice().roll(self._min_damage, self._max_damage),
+            False
+        )
 
-    def receive_hit(self, damage: int) -> int:
-        dealt = max(1, self._reduce_damage(damage))
-        self._health = max(0, self._health - dealt)
-        return dealt
+    def receive_hit(self, amount: int) -> Damage:
+        damage = Damage(amount)
 
-    def _reduce_damage(self, damage: int) -> int:
+        if self._defense is not None:
+            self._defense.handle(damage)
+
+        self._health = max(0, self._health - damage.amount)
         return damage
 
     def is_alive(self) -> bool:
         return self._health > 0
 
     def roll_gold_reward(self) -> int:
-        return Dice().roll(self._gold_reward // 2, self._gold_reward)
+        return Dice().roll(
+            self._gold_reward // 2,
+            self._gold_reward
+        )
 
     @property
     def experience_reward(self) -> int:

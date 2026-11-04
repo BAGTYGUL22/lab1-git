@@ -2,70 +2,115 @@
 from __future__ import annotations
 
 from typing import Sequence
+from pathlib import Path
 
-from .camp.merchant import Merchant
+from .game.game_facade import GameFacade
 from .combat.outcome import Outcome
 from .console_view import ConsoleView
 from .hero.hero import Hero
 from .hero.hero_class import HeroClass
-from .item.default_catalog import CHAINMAIL, ELVEN_BOW, EMBER_STAFF, IRON_SWORD, PLATE_ARMOR, create_default_catalog
 from .item.item import Item
-from .item.item_catalog import ItemCatalog
-from .world.crypt import Crypt
-from .world.dragon_lair import DragonLair
-from .world.forest import Forest
-from .world.location_registry import LocationRegistry
+
 
 VIEW = ConsoleView()
 
 
 def main() -> None:
-    catalog = create_default_catalog()
+    save_file = Path("saves") / "heroes.json"
 
-    locations = LocationRegistry([
-        Forest(catalog),
-        Crypt(catalog),
-        DragonLair(catalog),
-    ])
+    print("Файл сохранения: " + str(save_file.resolve()))
 
-    merchant = Merchant(catalog, [
-        IRON_SWORD, ELVEN_BOW, EMBER_STAFF, CHAINMAIL, PLATE_ARMOR,
-    ])
+    game = GameFacade(save_file)
+    hero = choose_hero(game)
 
-    hero = create_hero(catalog)
-    print(f"{hero.name} разбивает лагерь на опушке мистического леса.")
+    print(
+        f"{hero.name} разбивает лагерь "
+        f"на опушке мистического леса."
+    )
 
     while True:
         print()
+
         VIEW.print_hero(hero)
-        print("1 - отправиться в экспедицию, 2 - снаряжение, 3 - торговец, 0 - выйти из игры")
+
+        print(
+            "1 - отправиться в экспедицию, "
+            "2 - снаряжение, "
+            "3 - торговец, "
+            "4 - журнал, "
+            "0 - выйти из игры"
+        )
 
         choice = input().strip()
 
         if choice == "1":
-            go_on_expedition(hero, locations)
+            go_on_expedition(hero, game)
+
         elif choice == "2":
-            manage_equipment(hero)
+            manage_equipment(hero, game)
+
         elif choice == "3":
-            visit_merchant(hero, merchant)
+            visit_merchant(hero, game)
+
+        elif choice == "4":
+            for report in game.get_journal(hero.name):
+                print(
+                    VIEW.summarize(
+                        report,
+                        game.get_location(
+                            report.location_code
+                        ).display_name,
+                        game.get_tactic(
+                            report.tactic_code
+                        ).display_name,
+                    )
+                )
+
         elif choice == "0":
             return
+
         else:
             print("Такого варианта нет")
 
 
-def create_hero(catalog: ItemCatalog) -> Hero:
+def choose_hero(game: GameFacade) -> Hero:
+    heroes = game.heroes
+
+    if not heroes:
+        return create_hero(game)
+
+    print("Выберите сохраненного героя (0 - создать нового):")
+
+    for i, hero in enumerate(heroes):
+        print(
+            f"{i + 1} - {hero.name}, "
+            f"{hero.hero_class.display_name} "
+            f"{hero.level} ур."
+        )
+
+    index = read_choice(len(heroes))
+
+    return heroes[index] if index >= 0 else create_hero(game)
+
+
+def create_hero(game: GameFacade) -> Hero:
     print("Создайте своего героя!")
 
     while True:
         print("Выберите класс:")
+
         hero_classes = list(HeroClass)
 
         for i, hero_class in enumerate(hero_classes):
-            kit = hero_class.starter_kit(catalog)
+            weapon, armor = game.get_starter_kit(
+                hero_class.code
+            )
+
             print(
-                f"{i + 1} - {hero_class.display_name} (здоровье {hero_class.base_health}): "
-                f"{VIEW.describe(kit.create_weapon())}, {VIEW.describe(kit.create_armor())}"
+                f"{i + 1} - {hero_class.display_name} "
+                f"(здоровье {hero_class.base_health}): "
+                f"{VIEW.describe(weapon)}, "
+                f"{VIEW.describe(armor)}"
             )
 
         class_index = read_choice(len(hero_classes))
@@ -79,24 +124,31 @@ def create_hero(catalog: ItemCatalog) -> Hero:
         name = input().strip()
 
         try:
-            return (
-                Hero.Builder()
-                .set_name(name)
-                .set_hero_class(hero_class)
-                .set_starter_kit(hero_class.starter_kit(catalog))
-                .build()
+            return game.create_hero(
+                name,
+                hero_class.code
             )
+
         except ValueError as error:
-            print(f"Не получилось создать героя: {error}")
+            print(
+                f"Не получилось создать героя: {error}"
+            )
 
 
-def go_on_expedition(hero: Hero, locations: LocationRegistry) -> None:
-    all_locations = locations.all
+def go_on_expedition(
+    hero: Hero,
+    game: GameFacade
+) -> None:
+    all_locations = game.locations
 
     print("Куда отправимся?")
 
     for i, location in enumerate(all_locations):
-        print(f"{i + 1} - {location.display_name} (рекомендуемый уровень {location.recommended_level})")
+        print(
+            f"{i + 1} - {location.display_name} "
+            f"(рекомендуемый уровень "
+            f"{location.recommended_level})"
+        )
 
     index = read_choice(len(all_locations))
 
@@ -104,16 +156,48 @@ def go_on_expedition(hero: Hero, locations: LocationRegistry) -> None:
         return
 
     location = all_locations[index]
-    report = location.explore(hero)
+
+    print("Выберите тактику:")
+
+    for i, tactic in enumerate(game.tactics):
+        print(
+            f"{i + 1} - {tactic.display_name}: "
+            f"{tactic.description}"
+        )
+
+    tactic_index = read_choice(len(game.tactics))
+
+    if tactic_index < 0:
+        return
+
+    report = game.explore(
+        hero.name,
+        location.code,
+        game.tactics[tactic_index].code
+    )
 
     print()
-    VIEW.print_report(report, location.display_name)
 
-    if report.battle.outcome == Outcome.VICTORY and location.code == DragonLair.CODE:
-        print(f"\nДракон повержен! Барды еще долго будут петь о подвиге героя по имени {hero.name}.")
+    VIEW.print_report(
+        report,
+        location.display_name
+    )
+
+    if (
+        report.battle.outcome == Outcome.VICTORY
+        and report.battle.enemy.code == "dragon"
+    ):
+        print(
+            f"\nДракон повержен! "
+            f"Барды еще долго будут петь "
+            f"о подвиге героя по имени {hero.name}."
+        )
 
 
-def manage_equipment(hero: Hero) -> None:
+def manage_equipment(
+    hero: Hero,
+    game: GameFacade
+) -> None:
     inventory = hero.inventory
 
     if not inventory:
@@ -121,6 +205,7 @@ def manage_equipment(hero: Hero) -> None:
         return
 
     print("Что экипировать? (0 - назад)")
+
     print_items(inventory)
 
     index = read_choice(len(inventory))
@@ -129,28 +214,45 @@ def manage_equipment(hero: Hero) -> None:
         return
 
     item = inventory[index]
-    hero.equip(item)
 
-    print("Экипировано: " + VIEW.describe(item))
+    game.equip(hero.name, index)
+
+    print(
+        "Экипировано: " + VIEW.describe(item)
+    )
 
 
-def visit_merchant(hero: Hero, merchant: Merchant) -> None:
-    print(f'Торговец: "Чего желаешь?" (золото: {hero.gold})')
+def visit_merchant(
+    hero: Hero,
+    game: GameFacade
+) -> None:
+    print(
+        f'Торговец: "Чего желаешь?" '
+        f'(золото: {hero.gold})'
+    )
+
     print("1 - купить, 2 - продать, 0 - назад")
 
     choice = input().strip()
 
     if choice == "1":
-        buy(hero, merchant)
+        buy(hero, game)
+
     elif choice == "2":
-        sell(hero, merchant)
+        sell(hero, game)
 
 
-def buy(hero: Hero, merchant: Merchant) -> None:
-    showcase = merchant.showcase
+def buy(
+    hero: Hero,
+    game: GameFacade
+) -> None:
+    showcase = game.showcase
 
     for i, item in enumerate(showcase):
-        print(f"{i + 1} - {VIEW.describe(item)}: {item.price} золота")
+        print(
+            f"{i + 1} - {VIEW.describe(item)}: "
+            f"{item.price} золота"
+        )
 
     index = read_choice(len(showcase))
 
@@ -158,21 +260,37 @@ def buy(hero: Hero, merchant: Merchant) -> None:
         return
 
     try:
-        item = merchant.buy(hero, showcase[index].code)
-        print("Куплено: " + VIEW.describe(item))
+        item = game.buy(
+            hero.name,
+            showcase[index].code
+        )
+
+        print(
+            "Куплено: " + VIEW.describe(item)
+        )
+
     except ValueError as error:
         print(error)
 
 
-def sell(hero: Hero, merchant: Merchant) -> None:
+def sell(
+    hero: Hero,
+    game: GameFacade
+) -> None:
     inventory = hero.inventory
 
     if not inventory:
-        print("Продавать нечего (экипированные предметы продать нельзя)")
+        print(
+            "Продавать нечего "
+            "(экипированные предметы продать нельзя)"
+        )
         return
 
     for i, item in enumerate(inventory):
-        print(f"{i + 1} - {VIEW.describe(item)}: {merchant.sell_price(item)} золота")
+        print(
+            f"{i + 1} - {VIEW.describe(item)}: "
+            f"{game.sell_price(item)} золота"
+        )
 
     index = read_choice(len(inventory))
 
@@ -180,14 +298,23 @@ def sell(hero: Hero, merchant: Merchant) -> None:
         return
 
     item = inventory[index]
-    price = merchant.sell(hero, item)
 
-    print(f"Продано: {item.name} за {price} золота")
+    price = game.sell(
+        hero.name,
+        index
+    )
+
+    print(
+        f"Продано: {item.name} "
+        f"за {price} золота"
+    )
 
 
 def print_items(items: Sequence[Item]) -> None:
     for i, item in enumerate(items):
-        print(f"{i + 1} - {VIEW.describe(item)}")
+        print(
+            f"{i + 1} - {VIEW.describe(item)}"
+        )
 
 
 def read_choice(count: int) -> int:
