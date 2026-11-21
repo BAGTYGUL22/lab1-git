@@ -23,13 +23,12 @@ def test_evades_and_stops_chain():
     ) as singleton:
         handler.handle(damage)
         singleton.assert_called_once_with()
-
+ 
     assert damage.amount == 0
     assert damage.evaded is True
 
     dice.chance.assert_called_once_with(0.3)
     assert next_handler.mock_calls == []
-
 
 def test_forwards_damage_when_roll_fails():
     dice = create_autospec(Dice, instance=True)
